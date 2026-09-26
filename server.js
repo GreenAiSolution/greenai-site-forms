@@ -11,12 +11,14 @@
 
      GET  /             -> one-line 200 (Railway health check)
      *    /api/submit   -> api/submit.js  (site forms; POST + OPTIONS)
+     *    /api/queue    -> api/queue.js   (lead desk; bearer token)
    ========================================================================= */
 
 const http = require('http');
 
 const ROUTES = {
-  '/api/submit': require('./api/submit.js')
+  '/api/submit': require('./api/submit.js'),
+  '/api/queue':  require('./api/queue.js')
 };
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -71,6 +73,7 @@ const server = http.createServer(async function (req, res) {
   const path = (req.url || '/').split('?')[0];
 
   if (path === '/' || path === '/health') {
+    if (path === '/health') return res.status(200).json({ ok: true, ...require('./lib/queue.js').stats() });
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.status(200).end('greenai-forms ok\n');
   }

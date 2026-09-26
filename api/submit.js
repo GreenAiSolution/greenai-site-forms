@@ -12,7 +12,7 @@
    password lives in the SMTP_PASS environment variable, never in the repo.
    ========================================================================= */
 
-const nodemailer = require('nodemailer');
+const queue = require('../lib/queue.js');
 const { render } = require('../lib/template.js');
 const { firstReply, SERVICES } = require('../lib/reply.js');
 
@@ -148,61 +148,33 @@ module.exports = async function handler(req, res) {
     source: clip(b.source, 120) || 'greenaidigital.com'
   });
 
-  const USER = process.env.SMTP_USER || 'jaden@greenaidigital.com';
-  const PASS = process.env.SMTP_PASS;
-  if (!PASS) {
-    console.error('SMTP_PASS is not set');
-    return res.status(500).json({ ok: false, error: 'Mailer not configured.' });
-  }
-
   const forward = forwardToOpenClaw(d, k.kind, receivedAt, clip(b.source, 120) || 'greenaidigital.com');
 
-  try {
-    const tx = nodemailer.createTransport({
-      host: 'smtp.gmail.com', port: 587, secure: false,
-      auth: { user: USER, pass: PASS }
-    });
-    const formKey = KINDS[clip(b.form, 20)] ? clip(b.form, 20) : 'contact';
-    const reply = firstReply({ ...d, kind: formKey, contact: clip(b.name, 120), reference: clip(b.reference, 60) });
-    /* Machine-readable copy of the lead for the lead desk on Jaden's Mac,
-       which builds the RING demo recording and the follow-ups. */
-    const lead = {
-      v: 1, form: formKey, receivedAt: new Date().toISOString(),
-      first: d.first_name || clip(b.name, 120).split(/\s+/)[0] || '', business: d.business,
-      email: d.email, phone: d.phone || clip(b.mobile, 40), service: d.service || '',
-      trade: d.trade, area: d.service_area, reference: clip(b.reference, 60),
-      demo: reply.demo, source: clip(b.source, 120)
-    };
-    await tx.sendMail({
-      from: `GreenAI Website <${USER}>`,
-      to: USER,
-      replyTo: d.email,          /* reply goes straight to the customer */
-      subject: `${k.subject} — ${r.subjectLine}`,
-      headers: { 'X-GreenAI-Lead': Buffer.from(JSON.stringify(lead)).toString('base64') },
-      text: r.text,
-      html: r.html
-    });
+  const formKey = KINDS[clip(b.form, 20)] ? clip(b.form, 20) : 'contact';
+  const reply = firstReply({ ...d, kind: formKey, contact: clip(b.name, 120), reference: clip(b.reference, 60) });
+  const lead = {
+    v: 1, form: formKey, receivedAt: new Date().toISOString(),
+    first: d.first_name || clip(b.name, 120).split(/\s+/)[0] || '', business: d.business,
+    email: d.email, phone: d.phone || clip(b.mobile, 40), service: d.service || '',
+    trade: d.trade, area: d.service_area, reference: clip(b.reference, 60),
+    demo: reply.demo, source: clip(b.source, 120)
+  };
 
-    /* The instant first reply. Capped per address and per day so the form
-       cannot be used to mail strangers in bulk. A failure here never fails
-       the form: Jaden already has the lead. */
-    let replied = false;
-    if (allowReply(d.email)) {
-      try {
-        await tx.sendMail({
-          from: `Jaden at GreenAI <${USER}>`,
-          to: d.email,
-          subject: reply.subject,
-          headers: { 'X-GreenAI-Auto': 'first-reply' },
-          text: reply.text
-        });
-        replied = true;
-      } catch (e) { console.error('first reply failed:', e && e.message); }
-    }
-    await forward;
-    return res.status(200).json({ ok: true, replied });
+  /* Railway blocks outbound SMTP on this plan, so nothing is mailed from
+     here. The finished emails go into a durable queue; the lead desk on
+     Jaden's Mac collects them every 30 seconds and sends them from his Gmail.
+     The first reply is capped per address and per day so the form cannot be
+     used to mail strangers in bulk. */
+  try {
+    queue.push({
+      lead,
+      dossier: { subject: `${k.subject} — ${r.subjectLine}`, text: r.text, html: r.html, replyTo: d.email },
+      reply: allowReply(d.email) ? { to: d.email, subject: reply.subject, text: reply.text } : null
+    });
   } catch (err) {
-    console.error('send failed:', err && err.message);
+    console.error('queue write failed:', err && err.message);
     return res.status(502).json({ ok: false, error: 'Could not send. Please call (480) 798-0753.' });
   }
+  await forward;
+  return res.status(200).json({ ok: true });
 };
