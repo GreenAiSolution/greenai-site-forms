@@ -1,7 +1,8 @@
 /* ===========================================================================
    /api/queue  —  the lead desk on Jaden's Mac collects and confirms leads.
 
-     GET  /api/queue            -> { ok, jobs:[...] }  every pending lead
+     GET  /api/queue            -> { ok, jobs:[...] }  the oldest 25 pending leads
+     POST /api/queue {sweep:true} -> { ok, swept }   move queued bot junk to junk/
      POST /api/queue {ack:[{id, result}]} -> { ok, acked }
 
    Bearer-token only (LEAD_DESK_TOKEN). There is no CORS header on purpose:
@@ -21,6 +22,7 @@ function authorised(req) {
 module.exports = async function handler(req, res) {
   if (!authorised(req)) return res.status(401).json({ ok: false, error: 'Unauthorised' });
   if (req.method === 'GET') return res.status(200).json({ ok: true, jobs: queue.pending(), stats: queue.stats() });
+  if (req.method === 'POST' && req.body && req.body.sweep) return res.status(200).json({ ok: true, swept: queue.sweep(), stats: queue.stats() });
   if (req.method === 'POST') {
     const list = (req.body && Array.isArray(req.body.ack)) ? req.body.ack : [];
     let acked = 0;

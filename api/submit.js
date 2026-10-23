@@ -13,6 +13,7 @@
    ========================================================================= */
 
 const queue = require('../lib/queue.js');
+const { junkReason } = require('../lib/junk.js');
 const { render } = require('../lib/template.js');
 const { firstReply, SERVICES } = require('../lib/reply.js');
 
@@ -148,8 +149,6 @@ module.exports = async function handler(req, res) {
     source: clip(b.source, 120) || 'greenaidigital.com'
   });
 
-  const forward = forwardToOpenClaw(d, k.kind, receivedAt, clip(b.source, 120) || 'greenaidigital.com');
-
   const formKey = KINDS[clip(b.form, 20)] ? clip(b.form, 20) : 'contact';
   const reply = firstReply({ ...d, kind: formKey, contact: clip(b.name, 120), reference: clip(b.reference, 60) });
   const lead = {
@@ -159,6 +158,16 @@ module.exports = async function handler(req, res) {
     trade: d.trade, area: d.service_area, reference: clip(b.reference, 60),
     demo: reply.demo, source: clip(b.source, 120)
   };
+
+  /* Bot submissions are stored, not queued, and never get a first reply.
+     Answer 200 for the same reason as the honeypot. */
+  const junk = junkReason(lead, d.always_asked);
+  if (junk) {
+    try { queue.junk({ lead, message: d.always_asked }, junk); } catch (err) { console.error('junk write failed:', err && err.message); }
+    return res.status(200).json({ ok: true });
+  }
+
+  const forward = forwardToOpenClaw(d, k.kind, receivedAt, clip(b.source, 120) || 'greenaidigital.com');
 
   /* Railway blocks outbound SMTP on this plan, so nothing is mailed from
      here. The finished emails go into a durable queue; the lead desk on
